@@ -1,274 +1,319 @@
-<!DOCTYPE HTML>
-<html>
+import multiprocessing
+import os
+import gym
+import numpy as np
+import collections
+import cv2
+import retro
+from multiprocessing import managers
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import logging
+import gym_super_mario_bros
+from nes_py.wrappers import JoypadSpace
+from gym_super_mario_bros.actions import RIGHT_ONLY
 
-<head>
-    <meta charset="utf-8">
+class MaxAndSkipEnv(gym.Wrapper):
+    def __init__(self, env=None, skip=4):
+        """Return only every `skip`-th frame"""
+        super(MaxAndSkipEnv, self).__init__(env)
+        # most recent raw observations (for max pooling across time steps)
+        self._obs_buffer = collections.deque(maxlen=2)
+        self._skip = skip
 
-    <title>parallel_gsmb.py (editing)</title>
-    <link id="favicon" rel="shortcut icon" type="image/x-icon" href="/static/base/images/favicon-file.ico?v=e2776a7f45692c839d6eea7d7ff6f3b2">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-    <link rel="stylesheet" href="/static/components/jquery-ui/themes/smoothness/jquery-ui.min.css?v=3c2a865c832a1322285c55c6ed99abb2" type="text/css" />
-    <link rel="stylesheet" href="/static/components/jquery-typeahead/dist/jquery.typeahead.min.css?v=9df10041c3e07da766e7c48dd4c35e4a" type="text/css" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    
-    
-<link rel="stylesheet" href="/static/components/codemirror/lib/codemirror.css?v=1623ab0774d4d8dd3cca2f42deb63dea">
-<link rel="stylesheet" href="/static/components/codemirror/addon/dialog/dialog.css?v=c89dce10b44d2882a024e7befc2b63f5">
+    def step(self, action):
+        total_reward = 0.0
+        done = None
+        for _ in range(self._skip):
+            obs, reward, done, info = self.env.step(action)
+            self._obs_buffer.append(obs)
+            total_reward += reward
+            if done:
+                break
+        max_frame = np.max(np.stack(self._obs_buffer), axis=0)
+        return max_frame, total_reward, done, info
 
-    <link rel="stylesheet" href="/static/style/style.min.css?v=321d76aeb19982a565773cf9f9c8f1d0" type="text/css"/>
-    
-
-    <link rel="stylesheet" href="/custom/custom.css" type="text/css" />
-    <script src="/static/components/es6-promise/promise.min.js?v=f004a16cb856e0ff11781d01ec5ca8fe" type="text/javascript" charset="utf-8"></script>
-    <script src="/static/components/react/react.production.min.js?v=34f96ffc962a7deecc83037ccb582b58" type="text/javascript"></script>
-    <script src="/static/components/react/react-dom.production.min.js?v=b14d91fb641317cda38dbc9dbf985ab4" type="text/javascript"></script>
-    <script src="/static/components/create-react-class/index.js?v=94feb9971ce6d26211729abc43f96cd2" type="text/javascript"></script>
-    <script src="/static/components/requirejs/require.js?v=951f856e81496aaeec2e71a1c2c0d51f" type="text/javascript" charset="utf-8"></script>
-    <script>
-      require.config({
-          
-          urlArgs: "v=20210126151921",
-          
-          baseUrl: '/static/',
-          paths: {
-            'auth/js/main': 'auth/js/main.min',
-            custom : '/custom',
-            nbextensions : '/nbextensions',
-            kernelspecs : '/kernelspecs',
-            underscore : 'components/underscore/underscore-min',
-            backbone : 'components/backbone/backbone-min',
-            jed: 'components/jed/jed',
-            jquery: 'components/jquery/jquery.min',
-            json: 'components/requirejs-plugins/src/json',
-            text: 'components/requirejs-text/text',
-            bootstrap: 'components/bootstrap/dist/js/bootstrap.min',
-            bootstraptour: 'components/bootstrap-tour/build/js/bootstrap-tour.min',
-            'jquery-ui': 'components/jquery-ui/jquery-ui.min',
-            moment: 'components/moment/min/moment-with-locales',
-            codemirror: 'components/codemirror',
-            termjs: 'components/xterm.js/xterm',
-            typeahead: 'components/jquery-typeahead/dist/jquery.typeahead.min',
-          },
-          map: { // for backward compatibility
-              "*": {
-                  "jqueryui": "jquery-ui",
-              }
-          },
-          shim: {
-            typeahead: {
-              deps: ["jquery"],
-              exports: "typeahead"
-            },
-            underscore: {
-              exports: '_'
-            },
-            backbone: {
-              deps: ["underscore", "jquery"],
-              exports: "Backbone"
-            },
-            bootstrap: {
-              deps: ["jquery"],
-              exports: "bootstrap"
-            },
-            bootstraptour: {
-              deps: ["bootstrap"],
-              exports: "Tour"
-            },
-            "jquery-ui": {
-              deps: ["jquery"],
-              exports: "$"
-            }
-          },
-          waitSeconds: 30,
-      });
-
-      require.config({
-          map: {
-              '*':{
-                'contents': 'services/contents',
-              }
-          }
-      });
-
-      // error-catching custom.js shim.
-      define("custom", function (require, exports, module) {
-          try {
-              var custom = require('custom/custom');
-              console.debug('loaded custom.js');
-              return custom;
-          } catch (e) {
-              console.error("error loading custom.js", e);
-              return {};
-          }
-      })
-
-    document.nbjs_translations = {"domain": "nbjs", "locale_data": {"nbjs": {"": {"domain": "nbjs"}}}};
-    document.documentElement.lang = navigator.language.toLowerCase();
-    </script>
-
-    
-    
-
-</head>
-
-<body class="edit_app "
- 
-data-base-url="/"
-data-file-path="test/parallel_gsmb.py"
-
-  
- 
-
-dir="ltr">
-
-<noscript>
-    <div id='noscript'>
-      Jupyter Notebook requires JavaScript.<br>
-      Please enable it to proceed. 
-  </div>
-</noscript>
-
-<div id="header" role="navigation" aria-label="Top Menu">
-  <div id="header-container" class="container">
-  <div id="ipython_notebook" class="nav navbar-brand"><a href="/tree" title='dashboard'>
-      <img src='/static/base/images/logo.png?v=641991992878ee24c6f3826e81054a0f' alt='Jupyter Notebook'/>
-  </a></div>
-
-  
-
-<span id="save_widget" class="pull-left save_widget">
-    <span class="filename"></span>
-    <span class="last_modified"></span>
-</span>
+    def reset(self):
+        """Clear past frame buffer and init to first obs"""
+        self._obs_buffer.clear()
+        obs = self.env.reset()
+        self._obs_buffer.append(obs)
+        return obs
 
 
-  
+class ProcessFrame84(gym.ObservationWrapper):
+    """
+    Downsamples image to 84x84
+    Greyscales image
 
-  
-  
-  
-  
+    Returns numpy array
+    """
 
-    <span id="login_widget">
-      
-        <button id="logout" class="btn btn-sm navbar-btn">Logout</button>
-      
-    </span>
+    def __init__(self, env=None):
+        super(ProcessFrame84, self).__init__(env)
+        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(84, 84, 1), dtype=np.uint8)
 
-  
+    def observation(self, obs):
+        return ProcessFrame84.process(obs)
 
-  
-  
-  </div>
-  <div class="header-bar"></div>
-
-  
-
-<div id="menubar-container" class="container">
-  <div id="menubar">
-    <div id="menus" class="navbar navbar-default" role="navigation">
-      <div class="container-fluid">
-          <p  class="navbar-text indicator_area">
-          <span id="current-mode" >current mode</span>
-          </p>
-        <button type="button" class="btn btn-default navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
-          <i class="fa fa-bars"></i>
-          <span class="navbar-text">Menu</span>
-        </button>
-        <ul class="nav navbar-nav navbar-right">
-          <li id="notification_area"></li>
-        </ul>
-        <div class="navbar-collapse collapse">
-          <ul class="nav navbar-nav">
-            <li class="dropdown"><a href="#" class="dropdown-toggle" data-toggle="dropdown">File</a>
-              <ul id="file-menu" class="dropdown-menu">
-                <li id="new-file"><a href="#">New</a></li>
-                <li id="save-file"><a href="#">Save</a></li>
-                <li id="rename-file"><a href="#">Rename</a></li>
-                <li id="download-file"><a href="#">Download</a></li>
-              </ul>
-            </li>
-            <li class="dropdown"><a href="#" class="dropdown-toggle" data-toggle="dropdown">Edit</a>
-              <ul id="edit-menu" class="dropdown-menu">
-                <li id="menu-find"><a href="#">Find</a></li>
-                <li id="menu-replace"><a href="#">Find &amp; Replace</a></li>
-                <li class="divider"></li>
-                <li class="dropdown-header">Key Map</li>
-                <li id="menu-keymap-default"><a href="#">Default<i class="fa"></i></a></li>
-                <li id="menu-keymap-sublime"><a href="#">Sublime Text<i class="fa"></i></a></li>
-                <li id="menu-keymap-vim"><a href="#">Vim<i class="fa"></i></a></li>
-                <li id="menu-keymap-emacs"><a href="#">emacs<i class="fa"></i></a></li>
-              </ul>
-            </li>
-            <li class="dropdown"><a href="#" class="dropdown-toggle" data-toggle="dropdown">View</a>
-              <ul id="view-menu" class="dropdown-menu">
-              <li id="toggle_header" title="Show/Hide the logo and notebook title (above menu bar)">
-              <a href="#">Toggle Header</a></li>
-              <li id="menu-line-numbers"><a href="#">Toggle Line Numbers</a></li>
-              </ul>
-            </li>
-            <li class="dropdown"><a href="#" class="dropdown-toggle" data-toggle="dropdown">Language</a>
-              <ul id="mode-menu" class="dropdown-menu">
-              </ul>
-            </li>
-          </ul>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="lower-header-bar"></div>
+    @staticmethod
+    def process(frame):
+        if frame.size == 240 * 256 * 3:
+            img = np.reshape(frame, [240, 256, 3]).astype(np.float32)
+        else:
+            assert False, "Unknown resolution."
+        img = img[:, :, 0] * 0.299 + img[:, :, 1] * 0.587 + img[:, :, 2] * 0.114
+        resized_screen = cv2.resize(img, (84, 110), interpolation=cv2.INTER_AREA)
+        x_t = resized_screen[18:102, :]
+        x_t = np.reshape(x_t, [84, 84, 1])
+        return x_t.astype(np.uint8)
 
 
-</div>
+class ImageToPyTorch(gym.ObservationWrapper):
+    def __init__(self, env):
+        super(ImageToPyTorch, self).__init__(env)
+        old_shape = self.observation_space.shape
+        self.observation_space = gym.spaces.Box(low=0.0, high=1.0, shape=(old_shape[-1], old_shape[0], old_shape[1]),
+                                                dtype=np.float32)
 
-<div id="site">
+    def observation(self, observation):
+        return np.moveaxis(observation, 2, 0)
 
 
-<div id="texteditor-backdrop">
-<div id="texteditor-container" class="container"></div>
-</div>
+class ScaledFloatFrame(gym.ObservationWrapper):
+    """Normalize pixel values in frame --> 0 to 1"""
+
+    def observation(self, obs):
+        return np.array(obs).astype(np.float32) / 255.0
 
 
-</div>
+class BufferWrapper(gym.ObservationWrapper):
+    def __init__(self, env, n_steps, dtype=np.float32):
+        super(BufferWrapper, self).__init__(env)
+        self.dtype = dtype
+        old_space = env.observation_space
+        self.observation_space = gym.spaces.Box(old_space.low.repeat(n_steps, axis=0),
+                                                old_space.high.repeat(n_steps, axis=0), dtype=dtype)
+
+    def reset(self):
+        self.buffer = np.zeros_like(self.observation_space.low, dtype=self.dtype)
+        return self.observation(self.env.reset())
+
+    def observation(self, observation):
+        self.buffer[:-1] = self.buffer[1:]
+        self.buffer[-1] = observation
+        return self.buffer
+
+
+def make_env(env):
+    env = MaxAndSkipEnv(env)
+    env = ProcessFrame84(env)
+    env = ImageToPyTorch(env)
+    env = BufferWrapper(env, 4)
+    env = ScaledFloatFrame(env)
+    return JoypadSpace(env, RIGHT_ONLY)
+
+
+def play(agent, total_episodes, total_steps, update_lock, rewards, seed):
+    pid = os.getpid()
+    np.random.seed(seed)
+    env = gym_super_mario_bros.make('SuperMarioBros-1-1-v0')
+    env = make_env(env)  # Wraps the environment so that frames are grayscale
+    for episode in range(2500):
+        my_episode = total_episodes.value
+        state = env.reset()
+        total_reward = 0
+        steps = 0
+        terminal = False
+        while not terminal:
+            action = agent.act(state)
+            steps += 1
+            total_steps.value += 1
+
+            state_next, reward, terminal, info = env.step(action)
+            total_reward += reward
+            trans = (state, action, reward, state_next, terminal)
+            update_lock.acquire()
+            agent.remember(trans)
+            update_lock.release()
+
+            update_lock.acquire()
+            agent.update(total_steps, pid)
+            update_lock.release()
+
+            state = state_next
+        logger.info('PID:{}, Episode: {}, Total Steps: {}, Total Reward:{}'.format(pid, my_episode, steps, total_reward))
+        total_episodes.value += 1
+        rewards.append(total_reward)
+
+        if total_episodes.value % 99 == 0:
+            logger.info("Last 100 episodes average reward:{}".format(np.mean(rewards)))
+
+    env.close()
 
 
 
+class ReplayMemory(object):
+    def __init__(self, max_memory_size, batch_size, state_space):
+        self.point = -1
+        self.max_memory_size = max_memory_size
+        self.batch_size = batch_size
+        self.memory = collections.deque(maxlen=max_memory_size)
+        self.obs_ = torch.zeros((batch_size, *state_space), dtype=torch.float32)
+        self.obs_next_ = torch.zeros((batch_size, *state_space), dtype=torch.float32)
+        self.actions_ = torch.zeros((batch_size, 1), dtype=torch.int64)
+        self.rewards_ = torch.zeros((batch_size, 1), dtype=torch.float32)
+        self.dones_ = torch.zeros((batch_size, 1), dtype=torch.float32)
+
+    def sample(self):
+        idx = np.random.choice(len(self.memory), self.batch_size, replace=False)
+        for i in range(self.batch_size):
+            self.obs_[i] = torch.tensor(self.memory[idx[i]][0], dtype=torch.float32)
+            self.actions_[i] = torch.tensor(self.memory[idx[i]][1], dtype=torch.int64)
+            self.rewards_[i] = torch.tensor(self.memory[idx[i]][2], dtype=torch.float32)
+            self.obs_next_[i] = torch.tensor(self.memory[idx[i]][3], dtype=torch.float32)
+            self.dones_[i] = torch.tensor(self.memory[idx[i]][4], dtype=torch.float32)
+        return self.obs_, self.actions_, self.rewards_, self.obs_next_, self.dones_
+
+    def remember(self, trans):
+        self.memory.append(trans)
+        self.point = (self.point + 1) % self.max_memory_size
+        return self.point
+
+    def get_top_point(self):
+        return self.point
+
+    def current_size(self):
+        return len(self.memory)
 
 
+class DQNSolver(nn.Module):
 
-    
+    def __init__(self, input_shape, n_actions):
+        super(DQNSolver, self).__init__()
+        self.cnn1 = nn.Conv2d(4, 64, kernel_size=3, stride=2)
+        self.cnn2 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
+        self.cnn3 = nn.Conv2d(64, 16, kernel_size=3, stride=1)
+        self.pooling = nn.MaxPool2d(kernel_size=2)
+        self.flatten = nn.Flatten()
+        self.linear1 = nn.Linear(784, 128)
+        self.linear2 = nn.Linear(128, 5)
+
+    def forward(self, x):
+        x = self.cnn1(x)
+        x = self.pooling(x)
+        x = self.cnn2(x)
+        x = self.pooling(x)
+        x = self.cnn3(x)
+        x = self.flatten(x)
+        x = self.linear1(x)
+        x = self.linear2(x)
+        return x
 
 
-<script src="/static/edit/js/main.min.js?v=315e0382c28d43bf1007a5c2bd451d92" type="text/javascript" charset="utf-8"></script>
+class Agent(object):
+    def __init__(self, max_memory_size, batch_size, state_space, action_space):
+
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.batch_size = batch_size
+        self.state_space = state_space
+        self.max_memory_size = max_memory_size
+        self.memory = ReplayMemory(max_memory_size, batch_size, state_space)
+        self.predict_net = DQNSolver(state_space, action_space).to(self.device)
+        self.target_net = DQNSolver(state_space, action_space).to(self.device)
+        self.optimizer = torch.optim.Adam(self.predict_net.parameters(), lr=25e-5)
+        self.copy = 5000
+
+        self.gamma = 0.9
+        self.exploration_max = 1.0
+        self.exploration_rate = 1.0
+        self.exploration_min = 0.02
+        self.exploration_decay = 0.99
+        self.action_space = action_space
+
+        self.predict_net.share_memory()
+        self.target_net.share_memory()
 
 
-<script type='text/javascript'>
-  function _remove_token_from_url() {
-    if (window.location.search.length <= 1) {
-      return;
-    }
-    var search_parameters = window.location.search.slice(1).split('&');
-    for (var i = 0; i < search_parameters.length; i++) {
-      if (search_parameters[i].split('=')[0] === 'token') {
-        // remote token from search parameters
-        search_parameters.splice(i, 1);
-        var new_search = '';
-        if (search_parameters.length) {
-          new_search = '?' + search_parameters.join('&');
-        }
-        var new_url = window.location.origin + 
-                      window.location.pathname + 
-                      new_search + 
-                      window.location.hash;
-        window.history.replaceState({}, "", new_url);
-        return;
-      }
-    }
-  }
-  _remove_token_from_url();
-</script>
-</body>
+    def act(self, state):
+        state = torch.tensor([state])
+        if np.random.rand() < self.exploration_rate:
+            return np.random.choice(self.action_space, 1)[0]
 
-</html>
+        return int(torch.argmax(self.predict_net(state.to(self.device))).cpu())
+
+    def copy_model(self):
+        self.target_net.load_state_dict(self.predict_net.state_dict())
+
+    def remember(self, trans):
+        return self.memory.remember(trans)
+
+    def get_memory_size(self):
+        return self.memory.current_size()
+
+    def update(self, total_steps, pid):
+        if total_steps.value % (self.copy - 1) == 0:
+            self.copy_model()
+            logger.info("Model Copied.")
+
+        if self.memory.current_size() < self.memory.batch_size:
+            return
+        self.optimizer.zero_grad()
+        STATE, ACTION, REWARD, STATE2, DONE = self.memory.sample()
+        STATE = STATE.to(self.device)
+        ACTION = ACTION.to(self.device)
+        REWARD = REWARD.to(self.device)
+        STATE2 = STATE2.to(self.device)
+        DONE = DONE.to(self.device)
+
+        q_values = self.predict_net(STATE)
+        prediction = torch.gather(q_values, dim=1, index=ACTION)
+
+        q_values_next = self.target_net(STATE2)
+        target = REWARD + self.gamma * torch.mul(torch.max(q_values_next, dim=1, keepdim=True).values, 1 - DONE)
+
+        loss = F.smooth_l1_loss(prediction, target)
+
+        loss.backward()
+        self.optimizer.step()
+        self.exploration_rate *= self.exploration_decay
+        self.exploration_rate = max(self.exploration_rate, self.exploration_min)
+
+
+class MyManager(managers.BaseManager):
+    def __init__(self):
+        super(MyManager, self).__init__()
+
+
+MyManager.register('Memory', ReplayMemory)
+
+MyManager.register('Value', managers.Value, managers.ValueProxy)
+
+MyManager.register('Agent', Agent)
+
+MyManager.register('list', list, managers.ListProxy)
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logger = logging.getLogger("Mario_Training")
+    state_space = (4, 84, 84)
+    workers = 4
+
+    with MyManager() as manager:
+        agent = manager.Agent(max_memory_size=30000, batch_size=32, state_space=state_space, action_space=5)
+        total_episodes = manager.Value('i', 0)
+        total_steps = manager.Value('i', 0)
+        rewards = manager.list()
+        update_lock = multiprocessing.Lock()
+        processes = []
+        seeds = [np.random.randint(1000) for _ in range(workers)]
+        print(seeds)
+        for seed in seeds:
+            p = multiprocessing.Process(target=play, args=(agent, total_episodes, total_steps, update_lock, rewards, seed))
+            processes.append(p)
+            p.start()
+
+        for p in processes:
+            p.join()
+
